@@ -1,3 +1,7 @@
+#include <SDL_error.h>
+#include <SDL_render.h>
+#include <SDL_surface.h>
+#include <unordered_map>
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <SDL_image.h>
@@ -42,7 +46,7 @@ class SDLRenderer : public IRenderer {
 private:
   SDL_Window *window = nullptr;
   SDL_Renderer *renderer = nullptr;
-  SDL_Texture *texture = nullptr;
+  std::unordered_map<std::string, SDL_Texture *> textures;
 
 public:
   SDLRenderer(int width, int height) {
@@ -72,24 +76,52 @@ public:
   }
 
   bool loadTexture(const std::string &filePath) override {
-    texture = IMG_LoadTexture(renderer, filePath.c_str());
-    if (!texture) {
-      std::cerr << "Failed to load image! IMG_Error: " << IMG_GetError()
+    if (textures.count(filePath))
+      return true;
+
+    SDL_Surface *surface = IMG_Load(filePath.c_str());
+    if (!surface) {
+      std::cerr << "IMG_Load error: " << IMG_GetError() << std::endl;
+      return false;
+    }
+    SDL_Texture *newTexture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FreeSurface(surface);
+
+    if (!newTexture) {
+      std::cerr << "SDL_CreateTextureFromSurface error: " << SDL_GetError()
                 << std::endl;
       return false;
     }
+
+    textures[filePath] = newTexture;
+
     return true;
+  }
+
+  void renderTexture(const std::string &filePath, int x, int y) {
+    if (!textures.count(filePath))
+      return;
+
+    SDL_Texture *tex = textures[filePath];
+    SDL_Rect dst;
+    SDL_QueryTexture(tex, nullptr, nullptr, &dst.w, &dst.h);
+    dst.x = x;
+    dst.y = y;
+
+    SDL_RenderCopy(renderer, tex, nullptr, &dst);
   }
 
   void render() override {
     SDL_RenderClear(renderer);
-    SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+    /*SDL_RenderCopy(renderer, texture, nullptr, nullptr);*/
+    renderTexture("player.png", 32, 32);
     SDL_RenderPresent(renderer);
   }
 
   ~SDLRenderer() {
-    if (texture)
-      SDL_DestroyTexture(texture);
+    for (auto &[key, tex] : textures) {
+      SDL_DestroyTexture(tex);
+    }
     if (renderer)
       SDL_DestroyRenderer(renderer);
     if (window)
@@ -122,7 +154,7 @@ class Game {
 private:
   IInputHandler &inputHandler;
   IRenderer &renderer;
-  std::vector<Instance*> instances;
+  std::vector<Instance *> instances;
 
 public:
   Game(IInputHandler &i, IRenderer &r) : inputHandler(i), renderer(r) {}
@@ -135,15 +167,20 @@ public:
     }
   }
 
-  void init() { 
-    instances.emplace_back(new Player(100, 100, "player.png"));
-  }
+  void init() { instances.emplace_back(new Player(100, 100, "player.png")); }
 };
 
 int main() {
   SDLInputHandler inputHandler;
   SDLRenderer renderer(SCREEN_WIDTH, SCREEN_HEIGHT);
+
+  if (!renderer.loadTexture("player.png")) {
+    std::cerr << "Failed to load texture";
+    return 1;
+  }
+
   Game game(inputHandler, renderer);
+  game.init();
   game.run();
   return 0;
 }
